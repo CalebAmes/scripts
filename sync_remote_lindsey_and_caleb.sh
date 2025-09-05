@@ -19,12 +19,14 @@ RETRY_DELAY=10                     # Delay between retries (in seconds)
 # Parse arguments
 USE_MACHINE=false
 USE_TMUX=false
+USE_DIRECT=false
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --machine) USE_MACHINE=true ;;    # Use MACHINE_DIR
         --tmux) USE_TMUX=true ;;          # Enable tmux
         --local) REMOTE_HOST="$LOCAL_IP" ;; # Use local IP for remote host
-        --help) echo "Usage: $(basename "$0") [--machine] [--tmux] [--local]"; exit 0 ;;
+        --direct) USE_DIRECT=true ;;      # Run locally on spicymini to the mounted drive
+        --help) echo "Usage: $(basename "$0") [--machine] [--tmux] [--local] [--direct]"; exit 0 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
     shift
@@ -77,15 +79,26 @@ rsync_command() {
     local retries=0
     local success=false
 
-    send_notification "Sync Started" "Syncing $SOURCE_DIR to $REMOTE_HOST"
-    echo "[$(date)] Sync started: $SOURCE_DIR -> $REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" >> "$LOG_FILE"
+    if $USE_DIRECT; then
+        DEST_DISPLAY="$REMOTE_DIR"
+    else
+        DEST_DISPLAY="$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR"
+    fi
+
+    send_notification "Sync Started" "Syncing $SOURCE_DIR to $DEST_DISPLAY"
+    echo "[$(date)] Sync started: $SOURCE_DIR -> $DEST_DISPLAY" >> "$LOG_FILE"
 
     while [[ $retries -lt $MAX_RETRIES ]]; do
         echo "Attempt $(($retries + 1)) of $MAX_RETRIES..." | tee -a "$LOG_FILE"
 
         # Run rsync
-        rsync -av --progress --ignore-existing --exclude='.DS_Store' \
-            -e "ssh" "$SOURCE_DIR" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" 2>&1 | tee -a "$LOG_FILE"
+        if $USE_DIRECT; then
+            rsync -av --progress --ignore-existing --exclude='.DS_Store' \
+                "$SOURCE_DIR" "$REMOTE_DIR" 2>&1 | tee -a "$LOG_FILE"
+        else
+            rsync -av --progress --ignore-existing --exclude='.DS_Store' \
+                -e "ssh" "$SOURCE_DIR" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" 2>&1 | tee -a "$LOG_FILE"
+        fi
 
         # Capture rsync exit code
         local rsync_exit_code=${PIPESTATUS[0]}
@@ -94,10 +107,16 @@ rsync_command() {
         if [ $rsync_exit_code -eq 0 ]; then
             success=true
             break
-        elif ! check_remote_service || check_for_broken_pipe; then
-            echo "[$(date)] Service not reachable or 'Broken pipe' error detected. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
         else
-            echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+            if ! $USE_DIRECT; then
+                if ! check_remote_service || check_for_broken_pipe; then
+                    echo "[$(date)] Service not reachable or 'Broken pipe' error detected. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+                else
+                    echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+                fi
+            else
+                echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+            fi
         fi
 
         sleep $RETRY_DELAY

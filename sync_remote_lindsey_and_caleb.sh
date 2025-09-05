@@ -10,7 +10,6 @@ REMOTE_USER="server"               # Remote username
 REMOTE_HOST="spicymini"            # Remote server address or IP
 REMOTE_DIR="/Volumes/V/spicymini_raid/lindsey_and_caleb/2025"
 LOCAL_IP="192.168.1.69"                         # Local IP to use with --local
-LOG_FILE="$HOME/scripts/logs/rsync_sync.log"    # Log file location
 NOTIFY_APP="osascript"             # Notification tool for macOS
 TMUX_SESSION_NAME="rsync_sync"     # Tmux session name
 MAX_RETRIES=5                      # Maximum number of retries
@@ -50,7 +49,7 @@ send_notification() {
 check_source_dir() {
     if [ ! -d "$SOURCE_DIR" ]; then
         send_notification "Source Directory Missing" "The source directory $SOURCE_DIR does not exist."
-        echo "[$(date)] Source directory $SOURCE_DIR not found." >> "$LOG_FILE"
+        echo "[$(date)] Source directory $SOURCE_DIR not found."
         exit 1
     fi
 }
@@ -59,7 +58,7 @@ check_source_dir() {
 check_remote_service() {
     ssh -o ConnectTimeout=5 "$REMOTE_USER@$REMOTE_HOST" exit 2>/dev/null
     if [ $? -ne 0 ]; then
-        echo "[$(date)] Remote service not reachable at $REMOTE_HOST. Retrying..." | tee -a "$LOG_FILE"
+        echo "[$(date)] Remote service not reachable at $REMOTE_HOST. Retrying..."
         return 1
     fi
     return 0
@@ -67,10 +66,8 @@ check_remote_service() {
 
 # Check for "Broken pipe" errors in the log file
 check_for_broken_pipe() {
-    if grep -q "Broken pipe" "$LOG_FILE"; then
-        echo "[$(date)] Detected 'Broken pipe' error in log. Triggering retry..." | tee -a "$LOG_FILE"
-        return 1
-    fi
+    # Logging removed; cannot scan log file for 'Broken pipe'.
+    # Keep the function for compatibility but make it a no-op.
     return 0
 }
 
@@ -86,18 +83,18 @@ rsync_command() {
     fi
 
     send_notification "Sync Started" "Syncing $SOURCE_DIR to $DEST_DISPLAY"
-    echo "[$(date)] Sync started: $SOURCE_DIR -> $DEST_DISPLAY" >> "$LOG_FILE"
+    echo "[$(date)] Sync started: $SOURCE_DIR -> $DEST_DISPLAY"
 
     while [[ $retries -lt $MAX_RETRIES ]]; do
-        echo "Attempt $(($retries + 1)) of $MAX_RETRIES..." | tee -a "$LOG_FILE"
+        echo "Attempt $(($retries + 1)) of $MAX_RETRIES..."
 
         # Run rsync
         if $USE_DIRECT; then
             rsync -av --progress --ignore-existing --exclude='.DS_Store' \
-                "$SOURCE_DIR" "$REMOTE_DIR" 2>&1 | tee -a "$LOG_FILE"
+                "$SOURCE_DIR" "$REMOTE_DIR" 2>&1 | tee
         else
             rsync -av --progress --ignore-existing --exclude='.DS_Store' \
-                -e "ssh" "$SOURCE_DIR" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" 2>&1 | tee -a "$LOG_FILE"
+                -e "ssh" "$SOURCE_DIR" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR" 2>&1 | tee
         fi
 
         # Capture rsync exit code
@@ -110,12 +107,12 @@ rsync_command() {
         else
             if ! $USE_DIRECT; then
                 if ! check_remote_service || check_for_broken_pipe; then
-                    echo "[$(date)] Service not reachable or 'Broken pipe' error detected. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+                    echo "[$(date)] Service not reachable or 'Broken pipe' error detected. Retrying in $RETRY_DELAY seconds..."
                 else
-                    echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+                    echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..."
                 fi
             else
-                echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..." | tee -a "$LOG_FILE"
+                echo "[$(date)] Rsync failed with exit code $rsync_exit_code. Retrying in $RETRY_DELAY seconds..."
             fi
         fi
 
@@ -125,10 +122,10 @@ rsync_command() {
 
     if $success; then
         send_notification "Sync Complete" "All missing files have been copied successfully!"
-        echo "[$(date)] Sync completed successfully." >> "$LOG_FILE"
+        echo "[$(date)] Sync completed successfully."
     else
-        send_notification "Sync Failed" "All retries failed. Please check the logs."
-        echo "[$(date)] Sync failed after $MAX_RETRIES attempts. Check the log file: $LOG_FILE" >> "$LOG_FILE"
+        send_notification "Sync Failed" "All retries failed. Please check the output."
+        echo "[$(date)] Sync failed after $MAX_RETRIES attempts."
         exit 1
     fi
 }
@@ -146,7 +143,7 @@ if $USE_TMUX; then
         fi
 
         echo "Launching rsync in a tmux session: $TMUX_SESSION_NAME"
-        echo "[$(date)] Launched in tmux session: $TMUX_SESSION_NAME" >> "$LOG_FILE"
+        echo "[$(date)] Launched in tmux session: $TMUX_SESSION_NAME"
 
         # Start tmux session and run the command
         tmux new-session -d -s "$TMUX_SESSION_NAME" bash -c "$(declare -f rsync_command send_notification check_remote_service check_for_broken_pipe); rsync_command"
